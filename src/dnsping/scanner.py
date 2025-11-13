@@ -7,6 +7,7 @@ Author: Milad
 Version: 1.0.0
 """
 
+import argparse
 import asyncio
 import ctypes
 import importlib.resources
@@ -14,19 +15,17 @@ import logging
 import os
 import re
 import shutil
-import socket
 import subprocess
 import sys
 import tempfile
 import time
-import weakref
-from collections import defaultdict, deque
+from collections import deque
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum, IntEnum
 from pathlib import Path
-from typing import AsyncGenerator, Dict, Final, List, Optional, Set, Tuple, Union
+from typing import AsyncGenerator, Dict, Final, List, Optional, Set, Tuple
 
 # Third-party imports
 try:
@@ -35,9 +34,11 @@ try:
     import dns.query
     import dns.resolver
 
-    HAS_DNSPYTHON: Final[bool] = True
+    _HAS_DNSPYTHON = True
 except ImportError:
-    HAS_DNSPYTHON: Final[bool] = False
+    _HAS_DNSPYTHON = False
+
+HAS_DNSPYTHON: Final[bool] = _HAS_DNSPYTHON
 
 # Performance Constants
 SOCKET_TIMEOUT: Final[float] = 1.0
@@ -120,7 +121,7 @@ class PrivilegeManager:
                 cls._is_admin_cache = bool(ctypes.windll.shell32.IsUserAnAdmin())
             else:
                 # Unix-like: Check effective user ID
-                cls._is_admin_cache = os.geteuid() == 0
+                cls._is_admin_cache = os.geteuid() == 0  # type: ignore[attr-defined]
         except (AttributeError, OSError, ImportError):
             # Fallback for edge cases or missing modules
             cls._is_admin_cache = False
@@ -142,7 +143,12 @@ class PrivilegeManager:
         except (OSError, AttributeError):
             # Fallback method
             try:
-                result = subprocess.run(["which", "sudo"], capture_output=True, timeout=2, check=False)
+                result = subprocess.run(
+                    ["which", "sudo"],
+                    capture_output=True,
+                    timeout=2,
+                    check=False,
+                )
                 cls._sudo_available_cache = result.returncode == 0
             except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
                 cls._sudo_available_cache = False
@@ -170,7 +176,22 @@ class PrivilegeManager:
                 continue
 
             # Skip dangerous patterns
-            if any(dangerous in arg.lower() for dangerous in ["&", "|", ";", "`", "$", ">", "<", "*", "?", "[", "]"]):
+            if any(
+                dangerous in arg.lower()
+                for dangerous in [
+                    "&",
+                    "|",
+                    ";",
+                    "`",
+                    "$",
+                    ">",
+                    "<",
+                    "*",
+                    "?",
+                    "[",
+                    "]",
+                ]
+            ):
                 continue
 
             # Handle file arguments safely
@@ -325,7 +346,13 @@ class PrivilegeManager:
         if cls.is_admin():
             # Already have privileges, run directly
             try:
-                result = subprocess.run(command, capture_output=True, text=True, timeout=timeout, check=False)
+                result = subprocess.run(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout,
+                    check=False,
+                )
                 return result.returncode == 0, result.stdout or result.stderr
             except subprocess.TimeoutExpired:
                 return False, f"Command timed out after {timeout} seconds"
@@ -353,13 +380,25 @@ class PrivilegeManager:
                 f'Start-Process -FilePath "{command[0]}" -ArgumentList "{" ".join(command[1:])}" -Verb RunAs -Wait -WindowStyle Hidden',
             ]
 
-            result = subprocess.run(ps_command, capture_output=True, text=True, timeout=timeout, check=False)
+            result = subprocess.run(
+                ps_command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
 
             # PowerShell Start-Process -Wait will return 0 if the elevated process completed
             if result.returncode == 0:
-                return True, "Command executed successfully with elevated privileges"
+                return (
+                    True,
+                    "Command executed successfully with elevated privileges",
+                )
             else:
-                return False, result.stderr or "User declined UAC prompt or command failed"
+                return (
+                    False,
+                    result.stderr or "User declined UAC prompt or command failed",
+                )
 
         except subprocess.TimeoutExpired:
             return False, f"Elevation prompt timed out after {timeout} seconds"
@@ -374,12 +413,21 @@ class PrivilegeManager:
 
         try:
             sudo_command = ["sudo"] + command
-            result = subprocess.run(sudo_command, capture_output=True, text=True, timeout=timeout, check=False)
+            result = subprocess.run(
+                sudo_command,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                check=False,
+            )
 
             if result.returncode == 0:
                 return True, result.stdout or "Command executed successfully"
             else:
-                return False, result.stderr or f"Command failed with exit code {result.returncode}"
+                return (
+                    False,
+                    result.stderr or f"Command failed with exit code {result.returncode}",
+                )
 
         except subprocess.TimeoutExpired:
             return False, f"sudo command timed out after {timeout} seconds"
@@ -408,15 +456,30 @@ class PrivilegeManager:
                 # Try multiple methods for Unix-like systems
                 commands_to_try = [
                     # systemd-resolve (Ubuntu/Debian with systemd)
-                    (["systemd-resolve", "--flush-caches"], "DNS cache flushed (systemd-resolve)"),
+                    (
+                        ["systemd-resolve", "--flush-caches"],
+                        "DNS cache flushed (systemd-resolve)",
+                    ),
                     # systemctl restart systemd-resolved
-                    (["systemctl", "restart", "systemd-resolved"], "DNS cache flushed (systemd-resolved restart)"),
+                    (
+                        ["systemctl", "restart", "systemd-resolved"],
+                        "DNS cache flushed (systemd-resolved restart)",
+                    ),
                     # nscd restart (older systems)
-                    (["service", "nscd", "restart"], "DNS cache flushed (nscd restart)"),
+                    (
+                        ["service", "nscd", "restart"],
+                        "DNS cache flushed (nscd restart)",
+                    ),
                     # dscacheutil (macOS)
-                    (["dscacheutil", "-flushcache"], "DNS cache flushed (macOS dscacheutil)"),
+                    (
+                        ["dscacheutil", "-flushcache"],
+                        "DNS cache flushed (macOS dscacheutil)",
+                    ),
                     # mDNSResponder restart (macOS alternative)
-                    (["killall", "-HUP", "mDNSResponder"], "DNS cache flushed (macOS mDNSResponder)"),
+                    (
+                        ["killall", "-HUP", "mDNSResponder"],
+                        "DNS cache flushed (macOS mDNSResponder)",
+                    ),
                 ]
 
                 for command, success_message in commands_to_try:
@@ -430,14 +493,31 @@ class PrivilegeManager:
                 try:
                     # Some systems allow flushing without root
                     result = subprocess.run(
-                        ["systemd-resolve", "--flush-caches"], capture_output=True, text=True, timeout=10
+                        ["systemd-resolve", "--flush-caches"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
                     )
                     if result.returncode == 0:
-                        return True, "DNS cache flushed (systemd-resolve, no elevation needed)"
-                except:
+                        return (
+                            True,
+                            "DNS cache flushed (systemd-resolve, no elevation needed)",
+                        )
+                except (
+                    subprocess.TimeoutExpired,
+                    FileNotFoundError,
+                    OSError,
+                ) as e:
+                    # Log debug message for failed attempt without elevation
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"Failed to flush DNS without elevation: {e}")
                     pass
 
-                return False, "No suitable DNS flush method found for this system"
+                return (
+                    False,
+                    "No suitable DNS flush method found for this system",
+                )
 
         except Exception as e:
             return False, f"DNS cache flush error: {e}"
@@ -488,7 +568,7 @@ class Color(Enum):
     RESET = "\033[0m"
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class ScanConfig:
     """Immutable scanner configuration with performance defaults"""
 
@@ -496,7 +576,7 @@ class ScanConfig:
     max_servers: int = 50
     ping_count: int = 4
     timeout: float = 1.0
-    max_workers: int = min(32, os.cpu_count() * 4)  # Optimize for system
+    max_workers: int = min(32, (os.cpu_count() or 1) * 4)  # Optimize for system
     update_interval: float = 0.5
     retry_count: int = MAX_RETRIES
     enable_ping: bool = True
@@ -504,7 +584,7 @@ class ScanConfig:
     enable_dns_query: bool = True
 
 
-@dataclass(slots=True)
+@dataclass
 class DNSResult:
     """Memory-optimized DNS test result with __slots__"""
 
@@ -601,8 +681,8 @@ class DNSLatencyScanner:
             lines = await asyncio.to_thread(_read_file)
             for line in lines:
                 yield line.strip()
-        except Exception as e:
-            raise ConfigurationError(f"Error reading file {file_path}: {e}")
+        except Exception as exc:
+            raise ConfigurationError(f"Error reading file {file_path}: {exc}") from exc
 
     async def load_dns_servers(self) -> List[str]:
         """Optimized DNS server loading with provider mapping"""
@@ -612,14 +692,19 @@ class DNSLatencyScanner:
         # Determine the actual file path to use
         dns_file_path = self.config.dns_file
         if str(dns_file_path) == "dns_servers.txt" and not dns_file_path.exists():
-            # Use package resource for default file when it doesn't exist in current directory
+            # Use package resource for default file when it doesn't exist
             try:
-                dns_file_path = importlib.resources.files("dnsping") / "dns_servers.txt"
+                resource_path = importlib.resources.files("dnsping") / "dns_servers.txt"
+                dns_file_path = Path(str(resource_path))
             except (ImportError, AttributeError):
                 # Fallback for older Python versions
-                import pkg_resources
+                try:
+                    import pkg_resources  # type: ignore[import-not-found]  # noqa: PLC0415
 
-                dns_file_path = Path(pkg_resources.resource_filename("dnsping", "dns_servers.txt"))
+                    dns_file_path = Path(pkg_resources.resource_filename("dnsping", "dns_servers.txt"))
+                except ImportError:
+                    # If pkg_resources not available, use original path
+                    pass
 
         try:
             async for line in self._async_file_reader(dns_file_path):
@@ -637,10 +722,10 @@ class DNSLatencyScanner:
             self.logger.info(f"Loaded {len(servers)} DNS servers with {len(set(self.providers.values()))} providers")
             return servers
 
-        except FileNotFoundError:
-            raise ConfigurationError(f"DNS servers file not found: {dns_file_path}")
-        except Exception as e:
-            raise ConfigurationError(f"Failed to load DNS servers: {e}")
+        except FileNotFoundError as exc:
+            raise ConfigurationError(f"DNS servers file not found: {dns_file_path}") from exc
+        except Exception as exc:
+            raise ConfigurationError(f"Failed to load DNS servers: {exc}") from exc
 
     def get_provider_name(self, server: str) -> str:
         """Fast provider name lookup with caching"""
@@ -696,7 +781,10 @@ class DNSLatencyScanner:
 
         try:
             start_time = time.perf_counter()
-            reader, writer = await asyncio.wait_for(asyncio.open_connection(server, 53), timeout=self.config.timeout)
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_connection(server, 53),
+                timeout=self.config.timeout,
+            )
             end_time = time.perf_counter()
 
             writer.close()
@@ -720,7 +808,9 @@ class DNSLatencyScanner:
                 cmd = ["ping", "-c", "1", "-W", "1", server]
 
             process = await asyncio.create_subprocess_exec(
-                *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.DEVNULL
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
             )
 
             stdout, _ = await asyncio.wait_for(process.communicate(), timeout=self.config.timeout + 0.5)
@@ -812,7 +902,7 @@ class DNSLatencyScanner:
             result = DNSResult(server=server, provider=self.get_provider_name(server))
 
             successful_tests = 0
-            total_latency = 0
+            total_latency: float = 0.0
             all_methods = set()
 
             # Perform multiple measurements
@@ -898,8 +988,8 @@ class DNSLatencyScanner:
 
     async def _display_live_results(self) -> None:
         """Optimized real-time results display"""
-        last_update = 0
-        display_buffer = []
+        last_update = 0.0
+        display_buffer: List[str] = []
 
         while self.running:
             current_time = time.time()
@@ -938,7 +1028,8 @@ class DNSLatencyScanner:
                 if self.results:
                     # Sort and display top results
                     sorted_results = sorted(
-                        self.results.values(), key=lambda x: x.avg_latency if x.avg_latency != float("inf") else 999999
+                        self.results.values(),
+                        key=lambda x: (x.avg_latency if x.avg_latency != float("inf") else 999999),
                     )
 
                     display_buffer.extend(
@@ -1038,7 +1129,10 @@ class DNSLatencyScanner:
         # Sort results by performance
         sorted_results = sorted(
             self.results.values(),
-            key=lambda x: (x.avg_latency if x.avg_latency != float("inf") else 999999, -len(x.successful_methods)),
+            key=lambda x: (
+                x.avg_latency if x.avg_latency != float("inf") else 999999.0,
+                -len(x.successful_methods),
+            ),
         )
 
         # Display results table
@@ -1048,7 +1142,7 @@ class DNSLatencyScanner:
         print(f"{Color.CYAN.value}{safe_unicode('─', '-') * 130}{Color.RESET.value}")
 
         successful_count = 0
-        total_latency = 0
+        total_latency: float = 0.0
 
         for i, result in enumerate(sorted_results[: self.config.max_servers], 1):
             if result.avg_latency != float("inf"):
@@ -1294,7 +1388,11 @@ class DNSLatencyScanner:
         try:
             # Find active network interface first (no elevation needed)
             interface_result = subprocess.run(
-                ["netsh", "interface", "show", "interface"], capture_output=True, text=True, timeout=10
+                ["netsh", "interface", "show", "interface"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                check=False,
             )
 
             interface_name = None
@@ -1308,12 +1406,26 @@ class DNSLatencyScanner:
 
             # Fallback to common interface names
             if not interface_name:
-                common_interfaces = ["Wi-Fi", "Ethernet", "Local Area Connection", "Wireless Network Connection"]
+                common_interfaces = [
+                    "Wi-Fi",
+                    "Ethernet",
+                    "Local Area Connection",
+                    "Wireless Network Connection",
+                ]
                 interface_name = common_interfaces[0]  # Default to Wi-Fi
 
             if interface_name:
                 # Set primary DNS with elevation
-                primary_cmd = ["netsh", "interface", "ip", "set", "dns", interface_name, "static", primary_dns]
+                primary_cmd = [
+                    "netsh",
+                    "interface",
+                    "ip",
+                    "set",
+                    "dns",
+                    interface_name,
+                    "static",
+                    primary_dns,
+                ]
                 success, message = PrivilegeManager.run_elevated_command(primary_cmd, timeout=30)
 
                 if not success:
@@ -1321,12 +1433,24 @@ class DNSLatencyScanner:
 
                 # Set secondary DNS with elevation (if provided)
                 if secondary_dns:
-                    secondary_cmd = ["netsh", "interface", "ip", "add", "dns", interface_name, secondary_dns, "index=2"]
+                    secondary_cmd = [
+                        "netsh",
+                        "interface",
+                        "ip",
+                        "add",
+                        "dns",
+                        interface_name,
+                        secondary_dns,
+                        "index=2",
+                    ]
                     sec_success, sec_message = PrivilegeManager.run_elevated_command(secondary_cmd, timeout=30)
                     if not sec_success:
                         self.logger.warning(f"Secondary DNS setting failed: {sec_message}")
 
-                return True, f"DNS configured successfully on interface '{interface_name}'"
+                return (
+                    True,
+                    f"DNS configured successfully on interface '{interface_name}'",
+                )
             else:
                 return False, "Could not identify active network interface"
 
@@ -1352,7 +1476,10 @@ class DNSLatencyScanner:
                 success, message = PrivilegeManager.run_elevated_command(copy_cmd, timeout=30)
 
                 if success:
-                    return True, "DNS configured successfully in /etc/resolv.conf"
+                    return (
+                        True,
+                        "DNS configured successfully in /etc/resolv.conf",
+                    )
                 else:
                     return False, f"Failed to update resolv.conf: {message}"
 
@@ -1360,7 +1487,10 @@ class DNSLatencyScanner:
                 # Clean up temporary file
                 try:
                     os.unlink(tmp_file_path)
-                except:
+                except (FileNotFoundError, PermissionError, OSError) as e:
+                    # Log debug message for cleanup failure (non-critical)
+                    logger = logging.getLogger(__name__)
+                    logger.debug(f"Failed to clean up temporary file {tmp_file_path}: {e}")
                     pass
 
         except Exception as e:
@@ -1430,8 +1560,6 @@ class DNSLatencyScanner:
 
 def main() -> None:
     """Optimized main function with comprehensive CLI"""
-    import argparse
-
     parser = argparse.ArgumentParser(
         description="DNS Latency Scanner v1.0.0 - High Performance Edition",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1445,17 +1573,52 @@ Examples:
     )
 
     parser.add_argument(
-        "dns_file", nargs="?", default="dns_servers.txt", help="DNS servers file (default: dns_servers.txt)"
+        "dns_file",
+        nargs="?",
+        default="dns_servers.txt",
+        help="DNS servers file (default: dns_servers.txt)",
     )
-    parser.add_argument("-p", "--pings", type=int, default=4, help="Tests per server (default: 4)")
-    parser.add_argument("-m", "--max-servers", type=int, default=50, help="Maximum servers to scan (default: 50)")
-    parser.add_argument("-t", "--timeout", type=float, default=1.0, help="Timeout per test in seconds (default: 1.0)")
-    parser.add_argument("-w", "--workers", type=int, default=0, help="Concurrent workers (default: auto-detect)")
     parser.add_argument(
-        "-u", "--update-interval", type=float, default=0.5, help="Live display update interval (default: 0.5s)"
+        "-p",
+        "--pings",
+        type=int,
+        default=4,
+        help="Tests per server (default: 4)",
+    )
+    parser.add_argument(
+        "-m",
+        "--max-servers",
+        type=int,
+        default=50,
+        help="Maximum servers to scan (default: 50)",
+    )
+    parser.add_argument(
+        "-t",
+        "--timeout",
+        type=float,
+        default=1.0,
+        help="Timeout per test in seconds (default: 1.0)",
+    )
+    parser.add_argument(
+        "-w",
+        "--workers",
+        type=int,
+        default=0,
+        help="Concurrent workers (default: auto-detect)",
+    )
+    parser.add_argument(
+        "-u",
+        "--update-interval",
+        type=float,
+        default=0.5,
+        help="Live display update interval (default: 0.5s)",
     )
     parser.add_argument("--no-dns", action="store_true", help="Disable DNS query method")
-    parser.add_argument("--no-socket", action="store_true", help="Disable socket connection method")
+    parser.add_argument(
+        "--no-socket",
+        action="store_true",
+        help="Disable socket connection method",
+    )
     parser.add_argument("--no-ping", action="store_true", help="Disable ping method")
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument("--version", action="version", version="DNSPing v1.0.0")
@@ -1466,11 +1629,15 @@ Examples:
     # Configure logging
     if args.debug:
         logging.getLogger().setLevel(logging.DEBUG)
-        logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", datefmt="%H:%M:%S")
+        logging.basicConfig(
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            datefmt="%H:%M:%S",
+        )
 
     # Determine optimal worker count
     if args.workers <= 0:
-        args.workers = min(32, max(8, os.cpu_count() * 4))
+        cpu_count = os.cpu_count() or 1
+        args.workers = min(32, max(8, cpu_count * 4))
 
     # Create optimized configuration
     config = ScanConfig(
