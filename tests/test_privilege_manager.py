@@ -183,7 +183,7 @@ class TestPrivilegeManager:
         assert result == True, "Should use fallback method when shutil.which fails"
 
     def test_validate_arguments_safe_args(self):
-        """Test argument validation with safe arguments"""
+        """Test argument validation with safe arguments using whitelist"""
         # Arrange
         safe_args = ["-p", "4", "-m", "10", "dns_servers.txt"]
 
@@ -191,11 +191,14 @@ class TestPrivilegeManager:
         result = PrivilegeManager._validate_arguments(safe_args)
 
         # Assert
-        assert len(result) > 0, "Should accept safe arguments"
-        assert "-p" in result or "dns_servers.txt" in result, "Should preserve valid arguments"
+        assert "-p" in result, "Should accept known flag -p"
+        assert "4" in result, "Should accept numeric value after -p"
+        assert "-m" in result, "Should accept known flag -m"
+        assert "10" in result, "Should accept numeric value after -m"
+        assert "dns_servers.txt" in result, "Should accept .txt file"
 
     def test_validate_arguments_dangerous_args(self):
-        """Test argument validation filters dangerous patterns"""
+        """Test argument validation filters dangerous patterns using whitelist"""
         # Arrange
         dangerous_args = ["-p", "4", "&", "rm", "-rf", "/", "|", "cat", "/etc/passwd"]
 
@@ -203,12 +206,18 @@ class TestPrivilegeManager:
         result = PrivilegeManager._validate_arguments(dangerous_args)
 
         # Assert
+        assert "-p" in result, "Should accept known flag"
+        assert "4" in result, "Should accept numeric value"
         assert "&" not in result, "Should filter shell operators"
         assert "|" not in result, "Should filter pipe operators"
-        assert "rm" not in result or "-rf" not in result, "Should filter dangerous commands"
+        assert "rm" not in result, "Should filter unknown commands"
+        assert "-rf" not in result, "Should filter unknown flags"
+        assert "/" not in result, "Should filter standalone paths"
+        assert "cat" not in result, "Should filter unknown commands"
+        assert "/etc/passwd" not in result, "Should filter dangerous paths"
 
     def test_validate_arguments_numeric_validation(self):
-        """Test argument validation validates numeric arguments"""
+        """Test argument validation validates numeric arguments strictly"""
         # Arrange
         args_with_numeric = ["-p", "4", "-t", "1.5", "-m", "50"]
 
@@ -216,8 +225,78 @@ class TestPrivilegeManager:
         result = PrivilegeManager._validate_arguments(args_with_numeric)
 
         # Assert
-        # Should preserve numeric arguments after flags
-        assert len(result) >= 3, "Should preserve numeric arguments"
+        assert "-p" in result and "4" in result, "Should preserve -p and its numeric value"
+        assert "-t" in result and "1.5" in result, "Should preserve -t and its float value"
+        assert "-m" in result and "50" in result, "Should preserve -m and its numeric value"
+        assert len(result) == 6, "Should preserve all valid arguments"
+
+    def test_validate_arguments_invalid_numeric(self):
+        """Test argument validation rejects invalid numeric arguments"""
+        # Arrange
+        args_with_invalid_numeric = ["-p", "not_a_number", "-m", "50"]
+
+        # Act
+        result = PrivilegeManager._validate_arguments(args_with_invalid_numeric)
+
+        # Assert
+        assert "-p" in result, "Should preserve flag"
+        assert "not_a_number" not in result, "Should reject non-numeric value"
+        assert "-m" in result and "50" in result, "Should preserve valid numeric argument"
+
+    def test_validate_arguments_file_paths(self):
+        """Test argument validation with file paths"""
+        # Arrange
+        args_with_file = ["-f", "dns_servers.txt", "test.py"]
+
+        # Act
+        result = PrivilegeManager._validate_arguments(args_with_file)
+
+        # Assert
+        assert "-f" in result, "Should accept file flag"
+        assert "dns_servers.txt" in result, "Should accept .txt file"
+        assert "test.py" in result, "Should accept .py file"
+
+    def test_validate_arguments_file_path_dangerous_chars(self):
+        """Test argument validation rejects file paths with dangerous characters"""
+        # Arrange
+        args_with_dangerous_file = ["-f", "file&evil.txt", "safe.txt"]
+
+        # Act
+        result = PrivilegeManager._validate_arguments(args_with_dangerous_file)
+
+        # Assert
+        assert "-f" in result, "Should preserve flag"
+        assert "file&evil.txt" not in result, "Should reject file with dangerous characters"
+        assert "safe.txt" in result, "Should accept safe file"
+
+    def test_validate_arguments_unknown_flags(self):
+        """Test argument validation rejects unknown flags"""
+        # Arrange
+        args_with_unknown = ["-p", "4", "--unknown-flag", "value", "-m", "10"]
+
+        # Act
+        result = PrivilegeManager._validate_arguments(args_with_unknown)
+
+        # Assert
+        assert "-p" in result and "4" in result, "Should preserve known flags"
+        assert "--unknown-flag" not in result, "Should reject unknown flag"
+        assert "value" not in result, "Should reject value for unknown flag"
+        assert "-m" in result and "10" in result, "Should preserve other known flags"
+
+    def test_validate_arguments_script_names(self):
+        """Test argument validation accepts script names"""
+        # Arrange
+        import sys
+
+        args_with_script = ["dnsping", "-p", "4", "__main__.py", "-m", "10"]
+
+        # Act
+        result = PrivilegeManager._validate_arguments(args_with_script)
+
+        # Assert
+        assert "dnsping" in result, "Should accept script name 'dnsping'"
+        assert "__main__.py" in result, "Should accept .py script name"
+        assert "-p" in result and "4" in result, "Should preserve flags"
 
     def test_clear_cache(self):
         """Test that cache clearing works"""
