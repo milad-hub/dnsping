@@ -1486,33 +1486,18 @@ class DNSLatencyScanner:
             if secondary_dns:
                 resolv_conf_content += f"nameserver {secondary_dns}\n"
 
-            # Create temporary file with new content
-            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".tmp") as tmp_file:
+            with tempfile.NamedTemporaryFile(mode="w", delete=True, suffix=".tmp") as tmp_file:
                 tmp_file.write(resolv_conf_content)
+                tmp_file.flush()
                 tmp_file_path = tmp_file.name
 
-            try:
-                # Copy temporary file to /etc/resolv.conf with elevation
                 copy_cmd = ["cp", tmp_file_path, "/etc/resolv.conf"]
                 success, message = PrivilegeManager.run_elevated_command(copy_cmd, timeout=30)
 
                 if success:
-                    return (
-                        True,
-                        "DNS configured successfully in /etc/resolv.conf",
-                    )
+                    return True, "DNS configured successfully in /etc/resolv.conf"
                 else:
                     return False, f"Failed to update resolv.conf: {message}"
-
-            finally:
-                # Clean up temporary file
-                try:
-                    os.unlink(tmp_file_path)
-                except (FileNotFoundError, PermissionError, OSError) as e:
-                    # Log debug message for cleanup failure (non-critical)
-                    logger = logging.getLogger(__name__)
-                    logger.debug(f"Failed to clean up temporary file {tmp_file_path}: {e}")
-                    pass
 
         except Exception as e:
             return False, f"Unix DNS configuration error: {e}"
