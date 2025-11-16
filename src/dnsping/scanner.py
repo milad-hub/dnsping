@@ -157,62 +157,83 @@ class PrivilegeManager:
 
     @classmethod
     def _validate_arguments(cls, args: List[str]) -> List[str]:
-        """
-        Security-focused argument validation and sanitization
+        """Security-focused argument validation using whitelist approach"""
+        safe_args: List[str] = []
+        logger = logging.getLogger(__name__)
+        dangerous_chars = ["&", "|", ";", "`", "$", ">", "<", "*", "?", "[", "]"]
 
-        Args:
-            args: Command line arguments to validate
+        known_flags = {
+            "-t",
+            "--timeout",
+            "-p",
+            "--pings",
+            "-m",
+            "--max-servers",
+            "-w",
+            "--workers",
+            "-u",
+            "--update-interval",
+            "-f",
+            "--dns-file",
+            "--no-dns",
+            "--no-socket",
+            "--no-ping",
+            "--debug",
+            "--elevated",
+            "--version",
+        }
 
-        Returns:
-            List[str]: Sanitized arguments
-        """
-        # Filter out potentially dangerous arguments while preserving functionality
-        safe_args = []
-        skip_next = False
+        numeric_flags = {
+            "-t",
+            "--timeout",
+            "-p",
+            "--pings",
+            "-m",
+            "--max-servers",
+            "-w",
+            "--workers",
+            "-u",
+            "--update-interval",
+        }
 
-        for i, arg in enumerate(args):
-            if skip_next:
-                skip_next = False
-                continue
+        file_flags = {"-f", "--dns-file"}
 
-            # Skip dangerous patterns
-            if any(
-                dangerous in arg.lower()
-                for dangerous in [
-                    "&",
-                    "|",
-                    ";",
-                    "`",
-                    "$",
-                    ">",
-                    "<",
-                    "*",
-                    "?",
-                    "[",
-                    "]",
-                ]
-            ):
-                continue
+        i = 0
+        while i < len(args):
+            arg = args[i]
 
-            # Handle file arguments safely
-            if arg.startswith("-") or arg.endswith(".py") or arg.endswith(".txt"):
+            if arg in known_flags:
                 safe_args.append(arg)
-            elif i > 0 and args[i - 1] in [
-                "-t",
-                "--timeout",
-                "-p",
-                "--pings",
-                "-m",
-                "--max-servers",
-                "-w",
-                "--workers",
-            ]:
-                # Numeric arguments
-                try:
-                    float(arg)  # Validate numeric
+
+                if arg in numeric_flags and i + 1 < len(args):
+                    next_arg = args[i + 1]
+                    try:
+                        float(next_arg)
+                        safe_args.append(next_arg)
+                        i += 1
+                    except ValueError:
+                        logger.warning(f"Invalid numeric argument for {arg}: {next_arg}")
+
+                elif arg in file_flags and i + 1 < len(args):
+                    next_arg = args[i + 1]
+                    file_path = Path(next_arg)
+                    if file_path.suffix in (".txt", ".py"):
+                        if not any(char in next_arg for char in dangerous_chars):
+                            safe_args.append(next_arg)
+                            i += 1
+                        else:
+                            logger.warning(f"File path contains dangerous characters: {next_arg}")
+                    else:
+                        logger.warning(f"Invalid file extension for {arg}: {next_arg}")
+
+            elif arg.endswith((".py", "dnsping")) or arg == sys.executable:
+                safe_args.append(arg)
+
+            elif Path(arg).suffix in (".txt", ".py"):
+                if not any(char in arg for char in dangerous_chars):
                     safe_args.append(arg)
-                except ValueError:
-                    continue
+
+            i += 1
 
         return safe_args
 

@@ -76,8 +76,8 @@ class TestEdgeCases:
         # Assert
         assert result == False, "Should return False on timeout"
 
-    def test_validate_arguments_skip_next(self):
-        """Test argument validation skip_next logic"""
+    def test_validate_arguments_whitelist_approach(self):
+        """Test argument validation uses whitelist approach"""
         # Arrange
         args = ["dnsping", "-m", "5", "-p", "3"]
 
@@ -85,11 +85,14 @@ class TestEdgeCases:
         result = PrivilegeManager._validate_arguments(args)
 
         # Assert
-        assert "-m" in result, "Should include flag"
+        assert "dnsping" in result, "Should accept script name"
+        assert "-m" in result, "Should include known flag"
         assert "5" in result, "Should include numeric value"
+        assert "-p" in result, "Should include known flag"
+        assert "3" in result, "Should include numeric value"
 
     def test_validate_arguments_dangerous_chars(self):
-        """Test argument validation filters dangerous characters"""
+        """Test argument validation filters dangerous characters using whitelist"""
         # Arrange
         args = ["dnsping", "&", "|", ";", "test.txt"]
 
@@ -97,12 +100,14 @@ class TestEdgeCases:
         result = PrivilegeManager._validate_arguments(args)
 
         # Assert
+        assert "dnsping" in result, "Should accept script name"
         assert "&" not in result, "Should filter &"
         assert "|" not in result, "Should filter |"
         assert ";" not in result, "Should filter ;"
-        assert "test.txt" in result, "Should keep safe args"
+        assert "test.txt" in result, "Should keep safe .txt file"
 
     def test_validate_arguments_numeric_validation(self):
+        """Test argument validation rejects invalid numeric values"""
         # Arrange
         args = ["dnsping", "-m", "not_a_number"]
 
@@ -110,7 +115,8 @@ class TestEdgeCases:
         result = PrivilegeManager._validate_arguments(args)
 
         # Assert
-        assert "not_a_number" not in result, "Should filter invalid numeric"
+        assert "-m" in result, "Should preserve flag"
+        assert "not_a_number" not in result, "Should reject non-numeric value"
 
     def test_run_elevated_command_exception(self):
         """Test run_elevated_command exception handling"""
