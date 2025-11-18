@@ -413,7 +413,7 @@ class TestEdgeCases:
         assert success == True, "Should succeed even if secondary fails"
 
     def test_set_dns_unix_cleanup_permission_error(self):
-        """Test Unix DNS cleanup handles PermissionError"""
+        """Test Unix DNS configuration uses automatic cleanup"""
         # Arrange
         from pathlib import Path
 
@@ -426,16 +426,17 @@ class TestEdgeCases:
                 mock_file = MagicMock()
                 mock_file.name = "/tmp/test_resolv.conf"
                 mock_file.write = MagicMock()
+                mock_file.flush = MagicMock()
                 mock_temp.return_value.__enter__.return_value = mock_file
+                mock_temp.return_value.__exit__.return_value = None
                 with patch("dnsping.scanner.PrivilegeManager.run_elevated_command", return_value=(True, "Success")):
-                    with patch("os.unlink", side_effect=PermissionError("Permission denied")):
-                        success, message = scanner._set_dns_unix_elevated("8.8.8.8")
+                    success, message = scanner._set_dns_unix_elevated("8.8.8.8")
 
         # Assert
-        assert success == True, "Should succeed even if cleanup fails"
+        assert success == True, "Should succeed with automatic cleanup"
 
     def test_set_dns_unix_cleanup_file_not_found(self):
-        """Test Unix DNS cleanup handles FileNotFoundError"""
+        """Test Unix DNS configuration uses automatic cleanup"""
         # Arrange
         from pathlib import Path
 
@@ -448,13 +449,14 @@ class TestEdgeCases:
                 mock_file = MagicMock()
                 mock_file.name = "/tmp/test_resolv.conf"
                 mock_file.write = MagicMock()
+                mock_file.flush = MagicMock()
                 mock_temp.return_value.__enter__.return_value = mock_file
+                mock_temp.return_value.__exit__.return_value = None
                 with patch("dnsping.scanner.PrivilegeManager.run_elevated_command", return_value=(True, "Success")):
-                    with patch("os.unlink", side_effect=FileNotFoundError("File not found")):
-                        success, message = scanner._set_dns_unix_elevated("8.8.8.8")
+                    success, message = scanner._set_dns_unix_elevated("8.8.8.8")
 
         # Assert
-        assert success == True, "Should succeed even if cleanup fails"
+        assert success == True, "Should succeed with automatic cleanup"
 
     def test_set_system_dns_elevated_exception(self):
         """Test set_system_dns_elevated exception handling"""

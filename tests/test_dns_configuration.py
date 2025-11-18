@@ -271,25 +271,26 @@ class TestDNSConfiguration:
         assert success == True, "Should succeed on Unix"
 
     def test_set_dns_unix_elevated_cleanup(self, scanner):
-        """Test Unix DNS configuration cleans up temp file"""
+        """Test Unix DNS configuration uses automatic cleanup"""
         # Arrange
         primary_dns = "8.8.8.8"
-        import tempfile
 
         # Act
         with patch("tempfile.NamedTemporaryFile") as mock_temp:
             mock_file = MagicMock()
             mock_file.name = "/tmp/test_resolv.conf"
+            mock_file.flush = MagicMock()
             mock_temp.return_value.__enter__.return_value = mock_file
+            mock_temp.return_value.__exit__.return_value = None
             with patch.object(PrivilegeManager, "run_elevated_command", return_value=(True, "Success")):
-                with patch("os.unlink") as mock_unlink:
-                    success, message = scanner._set_dns_unix_elevated(primary_dns)
+                success, message = scanner._set_dns_unix_elevated(primary_dns)
 
         # Assert
-        mock_unlink.assert_called_once(), "Should clean up temporary file"
+        mock_file.flush.assert_called_once(), "Should flush file before elevation"
+        mock_temp.assert_called_once_with(mode="w", delete=True, suffix=".tmp"), "Should use automatic cleanup"
 
     def test_set_dns_unix_elevated_cleanup_error(self, scanner):
-        """Test Unix DNS configuration handles cleanup errors"""
+        """Test Unix DNS configuration succeeds with automatic cleanup"""
         # Arrange
         primary_dns = "8.8.8.8"
 
@@ -297,13 +298,14 @@ class TestDNSConfiguration:
         with patch("tempfile.NamedTemporaryFile") as mock_temp:
             mock_file = MagicMock()
             mock_file.name = "/tmp/test_resolv.conf"
+            mock_file.flush = MagicMock()
             mock_temp.return_value.__enter__.return_value = mock_file
+            mock_temp.return_value.__exit__.return_value = None
             with patch.object(PrivilegeManager, "run_elevated_command", return_value=(True, "Success")):
-                with patch("os.unlink", side_effect=OSError("Permission denied")):
-                    success, message = scanner._set_dns_unix_elevated(primary_dns)
+                success, message = scanner._set_dns_unix_elevated(primary_dns)
 
         # Assert
-        assert success == True, "Should succeed even if cleanup fails"
+        assert success == True, "Should succeed with automatic cleanup"
 
     def test_set_system_dns_legacy(self, scanner):
         """Test legacy set_system_dns method"""
